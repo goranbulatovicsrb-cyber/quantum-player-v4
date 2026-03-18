@@ -1,0 +1,169 @@
+name: Build QuantumPlayer
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+
+  # ─────────────────────────────────────────
+  #  LINUX BUILD
+  # ─────────────────────────────────────────
+  build-linux:
+    name: Linux (Ubuntu 22.04)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.6.2'
+          host: 'linux'
+          target: 'desktop'
+          arch: 'gcc_64'
+          modules: 'qtmultimedia'
+          cache: true
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y             cmake             build-essential             ninja-build             libgl1-mesa-dev             libpulse-dev             libasound2-dev
+
+      - name: Configure CMake
+        run: |
+          cmake -B build             -G Ninja             -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release -j$(nproc)
+
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuantumPlayer-Linux
+          path: build/QuantumPlayer
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────
+  #  WINDOWS BUILD
+  # ─────────────────────────────────────────
+  build-windows:
+    name: Windows (MSVC 2022)
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.6.2'
+          host: 'windows'
+          target: 'desktop'
+          arch: 'win64_msvc2019_64'
+          modules: 'qtmultimedia'
+          cache: true
+
+      - name: Configure CMake
+        run: |
+          cmake -B build `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Deploy Qt (windeployqt)
+        run: |
+          mkdir deploy
+          copy build\Release\QuantumPlayer.exe deploy\
+          windeployqt --release --multimedia deploy\QuantumPlayer.exe
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuantumPlayer-Windows
+          path: deploy\
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────
+  #  macOS BUILD
+  # ─────────────────────────────────────────
+  build-macos:
+    name: macOS (Ventura)
+    runs-on: macos-13
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.6.2'
+          host: 'mac'
+          target: 'desktop'
+          arch: 'clang_64'
+          modules: 'qtmultimedia'
+          cache: true
+
+      - name: Configure CMake
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+
+      - name: Deploy (macdeployqt)
+        run: |
+          macdeployqt build/QuantumPlayer.app -dmg
+
+      - name: Upload macOS build
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuantumPlayer-macOS
+          path: build/QuantumPlayer.dmg
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────
+  #  RELEASE — runs only on version tag
+  # ─────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: [build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Zip Linux binary
+        run: |
+          cd artifacts/QuantumPlayer-Linux
+          chmod +x QuantumPlayer
+          zip -r ../QuantumPlayer-Linux.zip .
+
+      - name: Zip Windows build
+        run: |
+          cd artifacts/QuantumPlayer-Windows
+          zip -r ../QuantumPlayer-Windows.zip .
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/QuantumPlayer-Linux.zip
+            artifacts/QuantumPlayer-Windows.zip
+            artifacts/QuantumPlayer-macOS/QuantumPlayer.dmg
+          generate_release_notes: true
